@@ -40,6 +40,15 @@
       gtag("config", "G-VJL3J26W7R");
     </script>
 
+    <!-- Supabase JS client (window.ENV injected by Vite plugin as inline script) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
+    <!-- Strategy layer: hide FMG toolbar so map fills screen -->
+    <style id="strategyOverrideCSS">
+      #optionsContainer { display: none !important; visibility: hidden !important; pointer-events: none !important; }
+      body, html { padding-top: 0 !important; margin-top: 0 !important; }
+    </style>
+
     <link rel="icon" type="image/png" href="images/icons/favicon-32x32.png" sizes="32x32" />
     <link rel="icon" type="image/png" href="images/icons/favicon-16x16.png" sizes="16x16" />
     <link rel="apple-touch-icon" href="images/icons/maskable_icon_x192.png" />
@@ -8596,5 +8605,16 @@
     <script defer src="modules/io/load.js?v=1.113.0"></script>
     <script defer src="modules/io/cloud.js?v=1.114.0"></script>
     <script defer src="modules/io/export.js?v=1.112.2"></script>
+
+    <!-- ── Real-Time Strategy Layer ─────────────────────────────────── -->
+    <script defer src="modules/game/game-state.js"></script>
+    <script defer src="modules/game/economy.js"></script>
+    <script defer src="modules/game/effects.js"></script>
+    <script defer src="modules/game/unit-system.js"></script>
+    <script defer src="modules/game/unit-builder.js"></script>
+    <script defer src="modules/game/game-hud.js"></script>
+    <script defer src="modules/game/npc-ai.js"></script>
+    <script defer src="modules/game/peace-treaty.js"></script>
+    <script defer src="modules/game/game-bootstrap.js"></script>
   </body>
 </html>
