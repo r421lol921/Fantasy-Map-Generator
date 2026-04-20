@@ -40,6 +40,13 @@
       gtag("config", "G-VJL3J26W7R");
     </script>
 
+    <!-- Strategy layer: Supabase env (replaced at build/serve time via meta tags) -->
+    <meta name="supabase-url" content="%VITE_SUPABASE_URL%" />
+    <meta name="supabase-anon-key" content="%VITE_SUPABASE_ANON_KEY%" />
+
+    <!-- Supabase JS client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
     <link rel="icon" type="image/png" href="images/icons/favicon-32x32.png" sizes="32x32" />
     <link rel="icon" type="image/png" href="images/icons/favicon-16x16.png" sizes="16x16" />
     <link rel="apple-touch-icon" href="images/icons/maskable_icon_x192.png" />
@@ -8596,5 +8603,16 @@
     <script defer src="modules/io/load.js?v=1.113.0"></script>
     <script defer src="modules/io/cloud.js?v=1.114.0"></script>
     <script defer src="modules/io/export.js?v=1.112.2"></script>
+
+    <!-- ── Real-Time Strategy Layer ─────────────────────────────────── -->
+    <script defer src="modules/game/game-state.js"></script>
+    <script defer src="modules/game/economy.js"></script>
+    <script defer src="modules/game/effects.js"></script>
+    <script defer src="modules/game/unit-system.js"></script>
+    <script defer src="modules/game/unit-builder.js"></script>
+    <script defer src="modules/game/game-hud.js"></script>
+    <script defer src="modules/game/npc-ai.js"></script>
+    <script defer src="modules/game/peace-treaty.js"></script>
+    <script defer src="modules/game/game-bootstrap.js"></script>
   </body>
 </html>
