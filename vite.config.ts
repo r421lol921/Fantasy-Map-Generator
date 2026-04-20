@@ -2,7 +2,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig({
     root: './src',
-    base: process.env.NETLIFY ? '/' : '/Fantasy-Map-Generator/',
+    // Use '/' in dev (v0 preview) and production Vercel deployments.
+    // Only use the sub-path on Netlify where the repo is hosted under that path.
+    base: process.env.NETLIFY ? '/Fantasy-Map-Generator/' : '/',
     build: {
         outDir: '../dist',
         assetsDir: './',
