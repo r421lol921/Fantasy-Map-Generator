@@ -40,12 +40,14 @@
       gtag("config", "G-VJL3J26W7R");
     </script>
 
-    <!-- Strategy layer: Supabase env (replaced at build/serve time via meta tags) -->
-    <meta name="supabase-url" content="%VITE_SUPABASE_URL%" />
-    <meta name="supabase-anon-key" content="%VITE_SUPABASE_ANON_KEY%" />
-
-    <!-- Supabase JS client -->
+    <!-- Supabase JS client (window.ENV injected by Vite plugin as inline script) -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
+    <!-- Strategy layer: hide FMG toolbar so map fills screen -->
+    <style id="strategyOverrideCSS">
+      #optionsContainer { display: none !important; visibility: hidden !important; pointer-events: none !important; }
+      body, html { padding-top: 0 !important; margin-top: 0 !important; }
+    </style>
 
     <link rel="icon" type="image/png" href="images/icons/favicon-32x32.png" sizes="32x32" />
     <link rel="icon" type="image/png" href="images/icons/favicon-16x16.png" sizes="16x16" />

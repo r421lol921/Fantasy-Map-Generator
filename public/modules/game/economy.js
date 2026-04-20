@@ -2,13 +2,14 @@
 // economy.js — City income, production queues, damage, and recovery
 
 const UNIT_COSTS = {
-  infantry:   {cost: 80,  buildTicks: 2},
-  tank:       {cost: 300, buildTicks: 6},
-  fighter:    {cost: 450, buildTicks: 8},
-  helicopter: {cost: 350, buildTicks: 7},
-  antiair:    {cost: 250, buildTicks: 5},
-  destroyer:  {cost: 500, buildTicks: 10},
-  battleship: {cost: 800, buildTicks: 14}
+  infantry:   {cost: 80,  buildTicks: 4},
+  tank:       {cost: 220, buildTicks: 8},
+  fighter:    {cost: 350, buildTicks: 10},
+  helicopter: {cost: 300, buildTicks: 9},
+  antiair:    {cost: 200, buildTicks: 7},
+  missile:    {cost: 180, buildTicks: 5},
+  destroyer:  {cost: 400, buildTicks: 12},
+  battleship: {cost: 600, buildTicks: 18}
 };
 
 // Income reduction based on damage level (0-1 scale)

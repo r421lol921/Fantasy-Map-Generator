@@ -1,27 +1,28 @@
 "use strict";
-// unit-system.js — Spawn, move, fuel, combat, rendering of all military units
+// unit-system.js — Spawn, move, fuel, combat, SVG rendering of all military units
 
 // Unit definitions: speed (px/tick), range (px), damage, fuelCost/tick, maxFuel
 const UNIT_DEFS = {
-  infantry:   {speed: 1.2,  range: 8,   damage: 15, fuelCost: 0,    maxFuel: 999, land: true,  sea: false, air: false, icon: "🪖", color: "#4a7c42", hp: 80},
-  tank:       {speed: 2.2,  range: 10,  damage: 40, fuelCost: 2,    maxFuel: 100, land: true,  sea: false, air: false, icon: "🚜", color: "#8b7355", hp: 120},
-  fighter:    {speed: 8.0,  range: 35,  damage: 55, fuelCost: 5,    maxFuel: 100, land: false, sea: false, air: true,  icon: "✈", color: "#3399cc", hp: 70},
-  helicopter: {speed: 5.0,  range: 20,  damage: 45, fuelCost: 4,    maxFuel: 100, land: false, sea: false, air: true,  icon: "🚁", color: "#669966", hp: 80},
-  antiair:    {speed: 1.8,  range: 30,  damage: 60, fuelCost: 0.5,  maxFuel: 100, land: true,  sea: false, air: false, icon: "⊕", color: "#cc4444", hp: 60},
-  destroyer:  {speed: 3.5,  range: 25,  damage: 50, fuelCost: 3,    maxFuel: 100, land: false, sea: true,  air: false, icon: "⛵", color: "#336699", hp: 100},
-  battleship: {speed: 2.5,  range: 40,  damage: 80, fuelCost: 4,    maxFuel: 100, land: false, sea: true,  air: false, icon: "⚓", color: "#1a3355", hp: 180}
+  infantry:   {speed: 1.2,  range: 8,   damage: 15, fuelCost: 0,   maxFuel: 999, land:true,  sea:false, air:false, color:"#4a9a42", hp:80},
+  tank:       {speed: 2.2,  range: 10,  damage: 40, fuelCost: 2,   maxFuel: 100, land:true,  sea:false, air:false, color:"#8b7c45", hp:120},
+  fighter:    {speed: 8.0,  range: 35,  damage: 55, fuelCost: 5,   maxFuel: 100, land:false, sea:false, air:true,  color:"#44aadd", hp:70},
+  helicopter: {speed: 5.0,  range: 20,  damage: 45, fuelCost: 4,   maxFuel: 100, land:false, sea:false, air:true,  color:"#66aa55", hp:80},
+  antiair:    {speed: 1.8,  range: 30,  damage: 60, fuelCost: 0.5, maxFuel: 100, land:true,  sea:false, air:false, color:"#cc4444", hp:60},
+  destroyer:  {speed: 3.5,  range: 25,  damage: 50, fuelCost: 3,   maxFuel: 100, land:false, sea:true,  air:false, color:"#3366aa", hp:100},
+  battleship: {speed: 2.5,  range: 40,  damage: 80, fuelCost: 4,   maxFuel: 100, land:false, sea:true,  air:false, color:"#1a3355", hp:180},
+  missile:    {speed: 12.0, range: 60,  damage: 90, fuelCost: 12,  maxFuel: 100, land:false, sea:false, air:true,  color:"#ff4400", hp:30}
 };
 
 const UnitSystem = {
-  layer: null,      // SVG group for all unit icons
-  selected: null,   // currently selected unit id
+  layer: null,
+  selected: null,
+  _moveListening: false,
 
   init() {
     if (this.layer) return;
     this.layer = d3.select("#viewbox").append("g")
       .attr("id", "gameUnits")
-      .attr("pointer-events", "all")
-      .style("font-family", "serif");
+      .attr("pointer-events", "all");
     this.render();
   },
 
@@ -44,26 +45,24 @@ const UnitSystem = {
       home_burg_id: homeBurgId
     }).select().single();
 
-    if (error) {console.error("[UnitSystem] spawnUnit:", error); return null;}
+    if (error) { console.error("[UnitSystem] spawnUnit:", error); return null; }
     GameState.units[data.id] = data;
     this.render();
     return data;
   },
 
-  // ── Move order: set target, unit moves toward it each tick ───────────────
+  // ── Move order ────────────────────────────────────────────────────────────
   async orderMove(unitId, tx, ty) {
     const unit = GameState.units[unitId];
     if (!unit) return;
     const sb = this._getClient();
     if (!sb) return;
     await sb.from("game_units").update({target_x: tx, target_y: ty, status: "moving"}).eq("id", unitId);
-    GameState.units[unitId].target_x = tx;
-    GameState.units[unitId].target_y = ty;
-    GameState.units[unitId].status = "moving";
+    GameState.units[unitId] = {...unit, target_x: tx, target_y: ty, status: "moving"};
     this.render();
   },
 
-  // ── Per-tick processing: movement, fuel, refuelling, combat resolution ────
+  // ── Per-tick: movement, fuel, refuel, combat ──────────────────────────────
   async processTick() {
     const sb = this._getClient();
     if (!sb) return;
@@ -76,93 +75,63 @@ const UnitSystem = {
       let {x, y, target_x, target_y, status, fuel, hp} = unit;
       let changed = false;
 
-      // ── Refuel check ──
+      // Refuel near own burg
       const nearBurg = this._nearestOwnBurg(unit.state_id, x, y, 15);
-      const isRefuelling = nearBurg && def.fuelCost > 0;
-
-      if (isRefuelling && fuel < def.maxFuel) {
-        fuel = Math.min(def.maxFuel, fuel + 8);
-        changed = true;
+      if (nearBurg && def.fuelCost > 0 && fuel < def.maxFuel) {
+        fuel = Math.min(def.maxFuel, fuel + 8); changed = true;
         if (status === "stranded") { status = "idle"; changed = true; }
-      } else if (def.fuelCost > 0) {
-        // Consume fuel only while moving
-        if (status === "moving") {
-          fuel = Math.max(0, fuel - def.fuelCost);
-          changed = true;
-        }
+      } else if (def.fuelCost > 0 && status === "moving") {
+        fuel = Math.max(0, fuel - def.fuelCost); changed = true;
         if (fuel <= 0 && status !== "stranded") {
-          status = "stranded";
-          target_x = null;
-          target_y = null;
-          changed = true;
+          status = "stranded"; target_x = null; target_y = null; changed = true;
         }
       }
 
-      // ── Movement ──
-      if (status === "moving" && target_x != null && target_y != null) {
-        const dx = target_x - x;
-        const dy = target_y - y;
+      // Move
+      if (status === "moving" && target_x != null) {
+        const dx = target_x - x, dy = target_y - y;
         const dist = Math.sqrt(dx*dx + dy*dy);
         if (dist < def.speed) {
-          x = target_x; y = target_y;
-          status = "idle"; target_x = null; target_y = null;
+          x = target_x; y = target_y; status = "idle"; target_x = null; target_y = null;
         } else {
-          x += (dx / dist) * def.speed;
-          y += (dy / dist) * def.speed;
+          x += (dx / dist) * def.speed; y += (dy / dist) * def.speed;
         }
         changed = true;
       }
 
-      // ── Combat: check for enemies in range ────────────────────────────────
+      // Combat vs enemy units
       if (status !== "stranded") {
         for (const [eid, enemy] of Object.entries(GameState.units)) {
-          if (eid === id) continue;
-          if (enemy.state_id === unit.state_id) continue;
+          if (eid === id || enemy.state_id === unit.state_id) continue;
           if (GameState.getRelation(unit.state_id, enemy.state_id) !== "War") continue;
-
-          const ex = enemy.x, ey = enemy.y;
-          const dist = Math.sqrt((ex-x)**2 + (ey-y)**2);
+          const dist = Math.sqrt((enemy.x-x)**2 + (enemy.y-y)**2);
           if (dist > def.range) continue;
+          if (unit.unit_type === "antiair" && !UNIT_DEFS[enemy.unit_type]?.air) continue;
 
-          // Anti-air targets aircraft only
-          if (unit.unit_type === "antiair") {
-            const eDef = UNIT_DEFS[enemy.unit_type];
-            if (!eDef?.air) continue;
-          }
+          if (window.Effects) Effects.spawnProjectile(x, y, enemy.x, enemy.y,
+            (unit.unit_type === "fighter" || unit.unit_type === "missile") ? "#00ccff" : "#ff4400");
 
-          // Fire!
-          if (window.Effects) {
-            Effects.spawnProjectile(x, y, ex, ey, unit.unit_type === "fighter" ? "#00ccff" : "#ff4400");
-          }
-          const dmg = def.damage;
-          const newEHp = Math.max(0, enemy.hp - dmg);
-
-          // Log combat event
+          const newEHp = Math.max(0, enemy.hp - def.damage);
           sb.from("combat_events").insert({
-            session_id: GameState.sessionId,
-            attacker_unit_id: id,
-            defender_unit_id: eid,
-            attacker_state: unit.state_id,
-            defender_state: enemy.state_id,
-            damage: dmg,
-            x: ex, y: ey,
-            event_type: "attack"
+            session_id: GameState.sessionId, attacker_unit_id: id,
+            defender_unit_id: eid, attacker_state: unit.state_id,
+            defender_state: enemy.state_id, damage: def.damage,
+            x: enemy.x, y: enemy.y, event_type: "attack"
           }).then(() => {});
 
           if (newEHp <= 0) {
-            // Unit destroyed
             destroyIds.push(eid);
-            if (window.Effects) Effects.spawnWreckage(ex, ey, enemy.unit_type);
-            if (window.Effects) Effects.spawnExplosion(ex, ey, enemy.unit_type === "battleship");
+            if (window.Effects) { Effects.spawnWreckage(enemy.x, enemy.y, enemy.unit_type); Effects.spawnExplosion(enemy.x, enemy.y, enemy.unit_type === "battleship"); }
           } else {
-            updates.push({id: eid, hp: newEHp});
-            GameState.units[eid].hp = newEHp;
+            updates.push({id: eid, hp: newEHp}); GameState.units[eid].hp = newEHp;
           }
-          break; // one target per tick
+          // Missiles die on impact
+          if (unit.unit_type === "missile") { destroyIds.push(id); if (window.Effects) Effects.spawnExplosion(x, y, true); }
+          break;
         }
 
-        // Naval bombardment of enemy cities in range
-        if (unit.unit_type === "battleship" || unit.unit_type === "destroyer") {
+        // Naval + missile bombardment of cities
+        if (["battleship","destroyer","missile"].includes(unit.unit_type)) {
           for (const [burgId, city] of Object.entries(GameState.cityEconomy)) {
             if (city.state_id === unit.state_id) continue;
             if (GameState.getRelation(unit.state_id, city.state_id) !== "War") continue;
@@ -170,8 +139,9 @@ const UnitSystem = {
             if (!burg) continue;
             const dist = Math.sqrt((burg.x-x)**2 + (burg.y-y)**2);
             if (dist > def.range) continue;
-            if (window.Economy) await Economy.damageCity(+burgId, 0.08);
-            if (window.Effects) Effects.spawnProjectile(x, y, burg.x, burg.y, "#ff8800");
+            if (window.Economy) await Economy.damageCity(+burgId, unit.unit_type === "missile" ? 0.18 : 0.08);
+            if (window.Effects) { Effects.spawnProjectile(x, y, burg.x, burg.y, "#ff8800"); Effects.spawnExplosion(burg.x, burg.y, unit.unit_type === "missile"); }
+            if (unit.unit_type === "missile") destroyIds.push(id);
             break;
           }
         }
@@ -183,12 +153,11 @@ const UnitSystem = {
       }
     }
 
-    // Batch writes
     for (const upd of updates) {
       const {id, ...fields} = upd;
       sb.from("game_units").update(fields).eq("id", id).then(() => {});
     }
-    for (const deadId of destroyIds) {
+    for (const deadId of [...new Set(destroyIds)]) {
       await sb.from("game_units").delete().eq("id", deadId);
       delete GameState.units[deadId];
     }
@@ -196,10 +165,10 @@ const UnitSystem = {
     this.render();
   },
 
-  // ── Render all units as SVG text icons ────────────────────────────────────
+  // ── Render all units as proper SVG military icons ─────────────────────────
   render() {
     if (!this.layer) return;
-    this.layer.selectAll("g.unit-icon").remove();
+    this.layer.selectAll("g.unit-g").remove();
 
     for (const [id, unit] of Object.entries(GameState.units)) {
       if (unit.session_id !== GameState.sessionId) continue;
@@ -207,74 +176,259 @@ const UnitSystem = {
       const isPlayer = unit.state_id === GameState.playerStateId;
       const isSelected = id === this.selected;
       const hpPct = unit.hp / (def.hp || 100);
+      const stateColor = pack?.states?.[unit.state_id]?.color || def.color || "#888";
+      const angle = this._movementAngle(unit);
 
       const g = this.layer.append("g")
-        .attr("class", "unit-icon")
+        .attr("class", "unit-g")
         .attr("transform", `translate(${unit.x},${unit.y})`)
         .attr("cursor", isPlayer ? "pointer" : "default")
         .attr("data-unit-id", id);
 
       // Selection ring
       if (isSelected) {
-        g.append("circle").attr("r", 8).attr("fill", "none")
-          .attr("stroke", "#ffff00").attr("stroke-width", 1.5).attr("opacity", 0.9);
+        g.append("circle").attr("r", 10)
+          .attr("fill", "none").attr("stroke", "#ffe066")
+          .attr("stroke-width", 1.5).attr("opacity", 0.95)
+          .attr("stroke-dasharray", "3,2");
       }
 
-      // Stranded indicator
+      // Stranded flash
       if (unit.status === "stranded") {
-        g.append("circle").attr("r", 7).attr("fill", "#cc0000").attr("opacity", 0.4);
+        g.append("circle").attr("r", 8).attr("fill", "#cc0000").attr("opacity", 0.35);
       }
 
-      // HP bar background
-      g.append("rect")
-        .attr("x", -5).attr("y", -11).attr("width", 10).attr("height", 2)
-        .attr("fill", "#333").attr("rx", 1);
-      // HP bar fill
-      g.append("rect")
-        .attr("x", -5).attr("y", -11).attr("width", 10 * hpPct).attr("height", 2)
-        .attr("fill", hpPct > 0.5 ? "#33cc33" : hpPct > 0.25 ? "#ffcc00" : "#cc2200")
-        .attr("rx", 1);
+      // Draw the unit-type SVG shape
+      this._drawUnitShape(g, unit.unit_type, stateColor, isPlayer, angle);
 
-      // Unit icon text
-      g.append("text")
-        .attr("text-anchor", "middle")
-        .attr("dominant-baseline", "central")
-        .attr("font-size", "7px")
-        .attr("fill", isPlayer ? "#ffffff" : "#ffaaaa")
-        .attr("stroke", def.color || "#333")
-        .attr("stroke-width", "0.3px")
-        .text(this._unitChar(unit.unit_type));
+      // HP bar
+      g.append("rect").attr("x",-6).attr("y",-13).attr("width",12).attr("height",2)
+        .attr("fill","#1a1a1a").attr("rx",1);
+      g.append("rect").attr("x",-6).attr("y",-13).attr("width", 12 * hpPct).attr("height",2)
+        .attr("fill", hpPct > 0.5 ? "#33dd33" : hpPct > 0.25 ? "#ffcc00" : "#dd2200").attr("rx",1);
 
-      // State color dot below icon
-      const stateColor = pack?.states?.[unit.state_id]?.color || def.color || "#888";
-      g.append("circle")
-        .attr("cy", 6).attr("r", 2.5)
-        .attr("fill", stateColor)
-        .attr("opacity", 0.85);
-
-      // Click to select (player units only)
+      // Click to select (player) or just highlight (enemy)
       if (isPlayer) {
-        g.on("click", () => this._selectUnit(id));
+        g.on("click", (event) => {
+          if (event) event.stopPropagation();
+          this._selectUnit(id);
+        });
+      } else {
+        g.on("click", (event) => {
+          if (event) event.stopPropagation();
+          const u = GameState.units[id];
+          if (window.GameHUD) GameHUD.showUnitInfo(u, false);
+        });
+      }
+    }
+
+    // Move target line for selected unit
+    if (this.selected && GameState.units[this.selected]) {
+      const u = GameState.units[this.selected];
+      if (u.target_x != null && u.target_y != null) {
+        this.layer.append("line")
+          .attr("class","unit-g")
+          .attr("x1", u.x).attr("y1", u.y)
+          .attr("x2", u.target_x).attr("y2", u.target_y)
+          .attr("stroke","#ffe066").attr("stroke-width","0.7")
+          .attr("stroke-dasharray","3,2").attr("opacity",0.7)
+          .attr("pointer-events","none");
       }
     }
   },
 
-  _unitChar(type) {
-    const chars = {infantry: "I", tank: "T", fighter: "F", helicopter: "H", antiair: "A", destroyer: "D", battleship: "B"};
-    return chars[type] || "?";
+  // ── Draw proper military-style SVG for each unit type ─────────────────────
+  _drawUnitShape(g, type, color, isPlayer, angleDeg) {
+    const outline = isPlayer ? "#ffffff" : "#ffaaaa";
+    const fill = color;
+
+    switch (type) {
+      case "infantry": {
+        // NATO infantry box with X
+        g.append("rect").attr("x",-5).attr("y",-4).attr("width",10).attr("height",8)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.8).attr("rx",0.5);
+        g.append("line").attr("x1",-4).attr("y1",-3).attr("x2",4).attr("y2",3)
+          .attr("stroke",outline).attr("stroke-width",0.8);
+        g.append("line").attr("x1",4).attr("y1",-3).attr("x2",-4).attr("y2",3)
+          .attr("stroke",outline).attr("stroke-width",0.8);
+        break;
+      }
+      case "tank": {
+        // Body + turret + barrel
+        const rot = g.append("g").attr("transform",`rotate(${angleDeg})`);
+        // Body
+        rot.append("rect").attr("x",-6).attr("y",-3).attr("width",12).attr("height",6)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.7).attr("rx",1);
+        // Tracks
+        rot.append("rect").attr("x",-6).attr("y",-5).attr("width",12).attr("height",2)
+          .attr("fill","#333").attr("stroke",outline).attr("stroke-width",0.5).attr("rx",0.5);
+        rot.append("rect").attr("x",-6).attr("y",3).attr("width",12).attr("height",2)
+          .attr("fill","#333").attr("stroke",outline).attr("stroke-width",0.5).attr("rx",0.5);
+        // Turret
+        rot.append("circle").attr("cx",0).attr("cy",0).attr("r",2.5)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.7);
+        // Barrel
+        rot.append("line").attr("x1",0).attr("y1",0).attr("x2",7).attr("y2",0)
+          .attr("stroke",outline).attr("stroke-width",1.2);
+        break;
+      }
+      case "fighter": {
+        // Airplane silhouette pointing in direction of movement
+        const rot = g.append("g").attr("transform",`rotate(${angleDeg})`);
+        // Fuselage
+        rot.append("ellipse").attr("cx",0).attr("cy",0).attr("rx",7).attr("ry",1.5)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.7);
+        // Wings
+        rot.append("polygon").attr("points","0,-1 4,0 0,1 -2,0")
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.6);
+        rot.append("polygon").attr("points","0,-1 -4,0 0,1 2,0")
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.6);
+        // Tail fins
+        rot.append("polygon").attr("points","-7,-1 -5,0 -7,1")
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.5);
+        break;
+      }
+      case "helicopter": {
+        // Helicopter: body + rotors
+        const rot = g.append("g").attr("transform",`rotate(${angleDeg})`);
+        // Body
+        rot.append("ellipse").attr("cx",0).attr("cy",0).attr("rx",5).attr("ry",2.5)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.7);
+        // Main rotor
+        rot.append("line").attr("x1",-7).attr("y1",-3).attr("x2",7).attr("y2",-3)
+          .attr("stroke",outline).attr("stroke-width",1.2);
+        rot.append("line").attr("x1",-3).attr("y1",-5).attr("x2",3).attr("y2",-1)
+          .attr("stroke",outline).attr("stroke-width",0.7);
+        // Tail boom
+        rot.append("line").attr("x1",-5).attr("y1",0).attr("x2",-9).attr("y2",0)
+          .attr("stroke",outline).attr("stroke-width",0.8);
+        // Tail rotor
+        rot.append("line").attr("x1",-9).attr("y1",-2).attr("x2",-9).attr("y2",2)
+          .attr("stroke",outline).attr("stroke-width",0.8);
+        break;
+      }
+      case "antiair": {
+        // AA radar dish + radar arcs
+        g.append("rect").attr("x",-4).attr("y",0).attr("width",8).attr("height",4)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.7).attr("rx",0.5);
+        g.append("line").attr("x1",0).attr("y1",0).attr("x2",0).attr("y2",-5)
+          .attr("stroke",outline).attr("stroke-width",1);
+        g.append("ellipse").attr("cx",0).attr("cy",-5).attr("rx",4).attr("ry",2)
+          .attr("fill","none").attr("stroke",outline).attr("stroke-width",0.8);
+        // Radar sweep arcs
+        g.append("path").attr("d","M-6,-7 A8,8 0 0,1 6,-7")
+          .attr("fill","none").attr("stroke",fill).attr("stroke-width",0.5).attr("opacity",0.6);
+        g.append("path").attr("d","M-9,-9 A11,11 0 0,1 9,-9")
+          .attr("fill","none").attr("stroke",fill).attr("stroke-width",0.4).attr("opacity",0.35);
+        break;
+      }
+      case "destroyer": {
+        const rot = g.append("g").attr("transform",`rotate(${angleDeg})`);
+        // Hull
+        rot.append("ellipse").attr("cx",0).attr("cy",0).attr("rx",8).attr("ry",2.5)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.7);
+        // Bow
+        rot.append("polygon").attr("points","8,0 6,-2 6,2")
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.5);
+        // Bridge
+        rot.append("rect").attr("x",-1).attr("y",-2).attr("width",4).attr("height",2)
+          .attr("fill","#223355").attr("stroke",outline).attr("stroke-width",0.5);
+        // Gun
+        rot.append("line").attr("x1",2).attr("y1",-1).attr("x2",7).attr("y2",-1)
+          .attr("stroke",outline).attr("stroke-width",1);
+        break;
+      }
+      case "battleship": {
+        const rot = g.append("g").attr("transform",`rotate(${angleDeg})`);
+        // Hull
+        rot.append("ellipse").attr("cx",0).attr("cy",0).attr("rx",11).attr("ry",3.5)
+          .attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.8);
+        // Superstructure
+        rot.append("rect").attr("x",-4).attr("y",-3).attr("width",7).attr("height",3)
+          .attr("fill","#152030").attr("stroke",outline).attr("stroke-width",0.5);
+        // Front guns
+        rot.append("line").attr("x1",4).attr("y1",-1).attr("x2",11).attr("y2",-1)
+          .attr("stroke",outline).attr("stroke-width",1.2);
+        rot.append("line").attr("x1",4).attr("y1",1).attr("x2",11).attr("y2",1)
+          .attr("stroke",outline).attr("stroke-width",1.2);
+        // Rear guns
+        rot.append("line").attr("x1",-4).attr("y1",-1).attr("x2",-11).attr("y2",-1)
+          .attr("stroke",outline).attr("stroke-width",1);
+        break;
+      }
+      case "missile": {
+        const rot = g.append("g").attr("transform",`rotate(${angleDeg})`);
+        // Missile body
+        rot.append("ellipse").attr("cx",0).attr("cy",0).attr("rx",6).attr("ry",1.2)
+          .attr("fill","#cc2200").attr("stroke","#ff6600").attr("stroke-width",0.6);
+        // Nose cone
+        rot.append("polygon").attr("points","6,0 4,-1 4,1")
+          .attr("fill","#ff4400").attr("stroke","none");
+        // Fins
+        rot.append("polygon").attr("points","-6,0 -4,-2.5 -3,0")
+          .attr("fill","#882200").attr("stroke","none");
+        rot.append("polygon").attr("points","-6,0 -4,2.5 -3,0")
+          .attr("fill","#882200").attr("stroke","none");
+        // Exhaust trail
+        rot.append("line").attr("x1",-6).attr("y1",0).attr("x2",-10).attr("y2",0)
+          .attr("stroke","#ff8800").attr("stroke-width",1.2).attr("opacity",0.7);
+        break;
+      }
+      default: {
+        g.append("circle").attr("r",5).attr("fill",fill).attr("stroke",outline).attr("stroke-width",0.8);
+      }
+    }
+  },
+
+  _movementAngle(unit) {
+    if (unit.target_x == null || unit.target_y == null) return 0;
+    return Math.atan2(unit.target_y - unit.y, unit.target_x - unit.x) * 180 / Math.PI;
   },
 
   _selectUnit(id) {
-    this.selected = this.selected === id ? null : id;
+    if (this.selected === id) {
+      // Deselect
+      this.selected = null;
+      this._stopMoveListening();
+      this.render();
+      if (window.GameHUD) GameHUD.clearUnitInfo();
+      return;
+    }
+    this.selected = id;
     this.render();
-    if (window.GameHUD) GameHUD.showUnitInfo(GameState.units[id]);
-    // Listen for next map click as move target
-    if (this.selected) {
-      d3.select("#map").on("click.unitMove", () => {
-        const [mx, my] = d3.mouse(d3.select("#viewbox").node());
-        this.orderMove(this.selected, mx, my);
-        d3.select("#map").on("click.unitMove", null);
-      });
+    if (window.GameHUD) GameHUD.showUnitInfo(GameState.units[id], true);
+    this._startMoveListening();
+  },
+
+  _startMoveListening() {
+    this._stopMoveListening();
+    this._moveListening = true;
+    const svg = document.getElementById("map") || document.querySelector("svg");
+    if (!svg) return;
+    this._mapClickHandler = (e) => {
+      if (!this.selected || !this._moveListening) return;
+      // Get SVG coordinates
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const viewboxEl = document.getElementById("viewbox") || svg;
+      const ctm = viewboxEl.getScreenCTM();
+      if (!ctm) return;
+      const svgPt = pt.matrixTransform(ctm.inverse());
+      this.orderMove(this.selected, svgPt.x, svgPt.y);
+      this._stopMoveListening();
+      this.selected = null;
+      this.render();
+    };
+    svg.addEventListener("click", this._mapClickHandler, {once: true});
+  },
+
+  _stopMoveListening() {
+    this._moveListening = false;
+    const svg = document.getElementById("map") || document.querySelector("svg");
+    if (svg && this._mapClickHandler) {
+      svg.removeEventListener("click", this._mapClickHandler);
+      this._mapClickHandler = null;
     }
   },
 
